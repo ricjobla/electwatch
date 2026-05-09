@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy
+alembic
+httpx
+beautifulsoup4
+SPARQLWrapper
+apscheduler
+pydantic
+psycopg2-binary
