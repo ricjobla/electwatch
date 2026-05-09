@@ -17,7 +17,7 @@ from app.models.election import Election
 from app.models.ingest_log import IngestLog
 
 SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
-USER_AGENT = "ElectWatch/0.1 (+https://github.com/electwatch/electwatch; python SPARQLWrapper)"
+USER_AGENT = "Electwatch/0.0.0 (https://github.com/ricjobla/electwatch) httpx/0.28.1 [Python/3.13.5]"
 # Small pages + per-month queries avoid WDQS gateway HTTP 504 on heavy DISTINCT queries.
 PAGE_SIZE = 40
 REQUEST_GAP_SECONDS = 1.0
