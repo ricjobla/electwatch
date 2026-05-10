@@ -23,13 +23,18 @@ export async function fetchJson(path, options = {}) {
   return res.json()
 }
 
-/** @param {{ from?: string, to?: string, status?: string, region?: string, limit?: number }} params */
+/**
+ * @param {{ from?: string, to?: string, status?: string, region?: string,
+ *           type?: string, country?: string, limit?: number }} params
+ */
 export function calendarQuery(params = {}) {
   const sp = new URLSearchParams()
   if (params.from) sp.set('from', params.from)
   if (params.to) sp.set('to', params.to)
   if (params.status) sp.set('status', params.status)
   if (params.region) sp.set('region', params.region)
+  if (params.type) sp.set('type', params.type)
+  if (params.country) sp.set('country', params.country)
   sp.set('limit', String(params.limit ?? 500))
   return `/api/calendar?${sp.toString()}`
 }

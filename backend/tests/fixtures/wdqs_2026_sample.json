@@ -1,0 +1,65 @@
+{
+  "head": {
+    "vars": ["election", "electionLabel", "country", "countryLabel", "iso2", "date"]
+  },
+  "results": {
+    "bindings": [
+      {
+        "election":      {"type": "uri",     "value": "http://www.wikidata.org/entity/Q108696420"},
+        "electionLabel": {"type": "literal", "xml:lang": "en", "value": "2026 Cypriot parliamentary election"},
+        "country":       {"type": "uri",     "value": "http://www.wikidata.org/entity/Q229"},
+        "countryLabel":  {"type": "literal", "xml:lang": "en", "value": "Cyprus"},
+        "iso2":          {"type": "literal", "value": "CY"},
+        "date":          {"datatype": "http://www.w3.org/2001/XMLSchema#dateTime", "type": "literal", "value": "2026-05-24T00:00:00Z"}
+      },
+      {
+        "election":      {"type": "uri",     "value": "http://www.wikidata.org/entity/Q113054321"},
+        "electionLabel": {"type": "literal", "xml:lang": "en", "value": "2026 Maltese general election"},
+        "country":       {"type": "uri",     "value": "http://www.wikidata.org/entity/Q233"},
+        "countryLabel":  {"type": "literal", "xml:lang": "en", "value": "Malta"},
+        "iso2":          {"type": "literal", "value": "MT"},
+        "date":          {"datatype": "http://www.w3.org/2001/XMLSchema#dateTime", "type": "literal", "value": "2026-05-30T00:00:00Z"}
+      },
+      {
+        "election":      {"type": "uri",     "value": "http://www.wikidata.org/entity/Q120000001"},
+        "electionLabel": {"type": "literal", "xml:lang": "en", "value": "2026 Czech legislative election"},
+        "country":       {"type": "uri",     "value": "http://www.wikidata.org/entity/Q213"},
+        "countryLabel":  {"type": "literal", "xml:lang": "en", "value": "Czech Republic"},
+        "iso2":          {"type": "literal", "value": "CZ"},
+        "date":          {"datatype": "http://www.w3.org/2001/XMLSchema#dateTime", "type": "literal", "value": "2026-06-07T00:00:00Z"}
+      },
+      {
+        "election":      {"type": "uri",     "value": "http://www.wikidata.org/entity/Q120000002"},
+        "electionLabel": {"type": "literal", "xml:lang": "en", "value": "2026 Swedish general election"},
+        "country":       {"type": "uri",     "value": "http://www.wikidata.org/entity/Q34"},
+        "countryLabel":  {"type": "literal", "xml:lang": "en", "value": "Sweden"},
+        "iso2":          {"type": "literal", "value": "SE"},
+        "date":          {"datatype": "http://www.w3.org/2001/XMLSchema#dateTime", "type": "literal", "value": "2026-09-13T00:00:00Z"}
+      },
+      {
+        "election":      {"type": "uri",     "value": "http://www.wikidata.org/entity/Q120000003"},
+        "electionLabel": {"type": "literal", "xml:lang": "en", "value": "2026 Hungarian general election"},
+        "country":       {"type": "uri",     "value": "http://www.wikidata.org/entity/Q28"},
+        "countryLabel":  {"type": "literal", "xml:lang": "en", "value": "Hungary"},
+        "iso2":          {"type": "literal", "value": "HU"},
+        "date":          {"datatype": "http://www.w3.org/2001/XMLSchema#dateTime", "type": "literal", "value": "2026-04-12T00:00:00Z"}
+      },
+      {
+        "election":      {"type": "uri",     "value": "http://www.wikidata.org/entity/Q120000004"},
+        "electionLabel": {"type": "literal", "xml:lang": "en", "value": "2026 Cypriot presidential election"},
+        "country":       {"type": "uri",     "value": "http://www.wikidata.org/entity/Q229"},
+        "countryLabel":  {"type": "literal", "xml:lang": "en", "value": "Cyprus"},
+        "iso2":          {"type": "literal", "value": "CY"},
+        "date":          {"datatype": "http://www.w3.org/2001/XMLSchema#dateTime", "type": "literal", "value": "2026-05-24T00:00:00Z"}
+      },
+      {
+        "election":      {"type": "uri",     "value": "http://www.wikidata.org/entity/Q108696420"},
+        "electionLabel": {"type": "literal", "xml:lang": "en", "value": "duplicate of Cypriot row"},
+        "country":       {"type": "uri",     "value": "http://www.wikidata.org/entity/Q229"},
+        "countryLabel":  {"type": "literal", "xml:lang": "en", "value": "Cyprus"},
+        "iso2":          {"type": "literal", "value": "CY"},
+        "date":          {"datatype": "http://www.w3.org/2001/XMLSchema#dateTime", "type": "literal", "value": "2026-05-24T00:00:00Z"}
+      }
+    ]
+  }
+}
