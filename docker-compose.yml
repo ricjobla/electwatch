@@ -2,9 +2,9 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: electwatch
-      POSTGRES_PASSWORD: electwatch
-      POSTGRES_DB: electwatch
+      POSTGRES_USER: ${POSTGRES_USER:-electwatch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-electwatch}
+      POSTGRES_DB: ${POSTGRES_DB:-electwatch}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -21,7 +21,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+psycopg2://electwatch:electwatch@db:5432/electwatch
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-electwatch}:${POSTGRES_PASSWORD:-electwatch}@db:5432/${POSTGRES_DB:-electwatch}
     depends_on:
       db:
         condition: service_healthy
