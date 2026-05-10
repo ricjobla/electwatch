@@ -5,8 +5,8 @@ import { countdownLabel, formatLongDate } from '../lib/dates'
 import { flagEmoji } from '../lib/flagEmoji'
 
 /**
- * Side-panel summary for one country. Shown when the user clicks a country
- * on the EuropeMap; deep-links to the full country page.
+ * Overlay summary for one country. Shown when the user clicks a country
+ * on the WorldMap; deep-links to the full country page.
  *
  * Fetches a 2-year window centered on today and splits into upcoming /
  * recent. Dismiss via the close button or by clicking another country.

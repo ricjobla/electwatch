@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react'
 
 import CountryDrilldown from '../components/CountryDrilldown'
 import ElectionCard from '../components/ElectionCard'
-import EuropeMap from '../components/EuropeMap'
+import WorldMap from '../components/WorldMap'
 import { useCalendar } from '../hooks/useCalendar'
 import { useElectionTypes } from '../hooks/useElectionTypes'
+import { mergeElectionTypes } from '../lib/electionTypes'
 
 function isoToday(yearOffset = 0) {
   const d = new Date()
@@ -15,7 +16,7 @@ function isoToday(yearOffset = 0) {
 /**
  * Compute ISO2 -> next-upcoming-election-date from a calendar response.
  *
- * Used to feed EuropeMap's color scale. We pick the earliest future date per
+ * Used to feed WorldMap's color scale. We pick the earliest future date per
  * country (today inclusive); if none, fall back to the most recent past
  * date so the country still gets a "tracked" tone.
  */
@@ -59,14 +60,13 @@ export default function Dashboard() {
 
   const { data: typeOptions = [] } = useElectionTypes()
 
-  const upcoming = useMemo(() => {
-    const todayIso = isoToday(0)
-    return elections.filter((e) => e.election_date >= todayIso)
-  }, [elections])
-
   const nextByIso = useMemo(
     () => nextElectionByCountry(elections),
     [elections],
+  )
+  const mergedTypeOptions = useMemo(
+    () => mergeElectionTypes(typeOptions),
+    [typeOptions],
   )
 
   return (
@@ -76,8 +76,9 @@ export default function Dashboard() {
           Dashboard
         </h2>
         <p className="mt-1 max-w-2xl text-sm text-slate-400">
-          Hover the map for country detail; click to pin. Cards below are the
-          full filtered calendar — click any card to drill into results.
+          Hover the map for country detail, click a country to pin it. Cards
+          below show the full filtered calendar — click any card to drill into
+          results.
         </p>
       </header>
 
@@ -86,7 +87,7 @@ export default function Dashboard() {
         to={to}
         status={status}
         type={type}
-        typeOptions={typeOptions}
+        typeOptions={mergedTypeOptions}
         onChangeFrom={setFrom}
         onChangeTo={setTo}
         onChangeStatus={setStatus}
@@ -95,24 +96,21 @@ export default function Dashboard() {
         loading={isFetching}
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
-        <div>
-          <EuropeMap
-            nextElectionByCountry={nextByIso}
-            onCountryClick={setSelectedIso}
-            selectedIso2={selectedIso}
-          />
-        </div>
-        <div>
-          {selectedIso ? (
+      <div className="relative">
+        <WorldMap
+          nextElectionByCountry={nextByIso}
+          onCountryClick={setSelectedIso}
+          selectedIso2={selectedIso}
+          className="h-[68vh] min-h-[520px]"
+        />
+        {selectedIso && (
+          <div className="absolute top-3 right-3 z-20 max-h-[calc(100%-1.5rem)] w-[360px] overflow-y-auto shadow-2xl">
             <CountryDrilldown
               isoCode={selectedIso}
               onClose={() => setSelectedIso(null)}
             />
-          ) : (
-            <UpcomingSummary elections={upcoming.slice(0, 6)} />
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {isLoading && (
@@ -215,42 +213,6 @@ function FilterField({ label, children }) {
       {label}
       {children}
     </label>
-  )
-}
-
-function UpcomingSummary({ elections }) {
-  return (
-    <aside className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
-      <h3 className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
-        Next on the calendar
-      </h3>
-      {elections.length === 0 ? (
-        <p className="mt-3 font-mono text-xs text-slate-500">
-          No upcoming elections in current filter.
-        </p>
-      ) : (
-        <ul className="mt-3 space-y-2">
-          {elections.map((e) => (
-            <li key={e.id} className="rounded border border-slate-800 bg-slate-950/60 p-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-mono uppercase tracking-wider text-slate-500">
-                  {e.country_id}
-                </span>
-                <span className="font-mono text-slate-500">
-                  {e.election_date}
-                </span>
-              </div>
-              <div className="mt-1 line-clamp-1 text-sm text-slate-100">
-                {e.title}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="mt-3 font-mono text-[10px] text-slate-600">
-        Click a country on the map to pin its details.
-      </p>
-    </aside>
   )
 }
 
