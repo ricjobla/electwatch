@@ -1,14 +1,40 @@
-"""Ingest upcoming/historic European elections from Wikidata (SPARQL)."""
+"""Ingest upcoming European elections from Wikidata.
+
+Strategy: a single optimized SPARQL query against WDQS, with a Wikipedia
+"Elections in YYYY" fallback for resilience. Replaces the previous per-country
+× per-month pagination, which fanned out into 600+ requests and stalled on
+WDQS rate limits.
+
+The SPARQL query narrows to European countries via ``?country wdt:P30 wd:Q46 ;
+wdt:P297 ?iso2`` *before* the election join, so the planner only ever touches
+~45 country items. Date is constrained by a half-open ``xsd:dateTime`` range
+with ``hint:rangeSafe`` so Blazegraph can use a range scan rather than a
+``YEAR()``/``MONTH()`` filter on every binding.
+
+ParlGov continues to own historic European results
+(:mod:`app.ingest.parlgov`); this module only handles upcoming/calendar data.
+
+CLI::
+
+    python -m app.ingest.wikidata --year 2026
+    python -m app.ingest.wikidata --year 2026 --source wikipedia
+    python -m app.ingest.wikidata --year 2026 --dry-run --months 5,6
+"""
 
 from __future__ import annotations
 
 import time
 import urllib.error
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
+import httpx
 from SPARQLWrapper import JSON, POST, SPARQLWrapper
-from SPARQLWrapper.SPARQLExceptions import EndPointInternalError
+from SPARQLWrapper.SPARQLExceptions import (
+    EndPointInternalError,
+    SPARQLWrapperException,
+)
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -17,75 +43,80 @@ from app.models.election import Election
 from app.models.ingest_log import IngestLog
 
 SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
-USER_AGENT = "ElectWatch/0.1 (+https://github.com/electwatch/electwatch; python SPARQLWrapper)"
-# Small pages + per-month queries avoid WDQS gateway HTTP 504 on heavy DISTINCT queries.
-PAGE_SIZE = 40
-REQUEST_GAP_SECONDS = 1.0
-GATEWAY_RETRY_CODES = frozenset({502, 503, 504})
-# WDQS HTTP 500 often wraps Blazegraph java.util.concurrent.TimeoutException.
-# WDQS sometimes enforces ~1 request/minute; widen paging gap after any HTTP 429.
-MIN_GAP_AFTER_429_SECONDS = 61.0
+USER_AGENT = (
+    "Electwatch/0.1.0 "
+    "(https://github.com/ricjobla/electwatch; electwatch@example.com) "
+    "httpx/0.28"
+)
+SPARQL_TIMEOUT_SECONDS = 30
+WIKIPEDIA_HTTP_TIMEOUT = 20.0
+
+SourceMode = Literal["auto", "sparql", "wikipedia"]
 
 
-class _RequestSpacing:
-    __slots__ = ("gap_seconds",)
+@dataclass(frozen=True)
+class ElectionRow:
+    """Normalized shape produced by both the SPARQL and Wikipedia paths.
 
-    def __init__(self) -> None:
-        self.gap_seconds = REQUEST_GAP_SECONDS
+    `qid` is a Wikidata Q-id (``Q...``) for SPARQL rows or a deterministic
+    pseudo-id (``wp-...``) for Wikipedia rows. The DB ``Election.id`` derives
+    from this via :func:`_election_pk`.
+    """
 
-    def expand_after_429(self) -> None:
-        self.gap_seconds = max(self.gap_seconds, MIN_GAP_AFTER_429_SECONDS)
+    qid: str
+    title: str
+    election_date: date
+    country_iso2: str
+    country_name: str
+    country_qid: str | None = None
+    election_uri: str | None = None
+    wikipedia_url: str | None = None
 
 
-ELECTIONS_QUERY_TEMPLATE = """
-PREFIX wd: <http://www.wikidata.org/entity/>
-PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-PREFIX wikibase: <http://wikiba.se/ontology#>
-PREFIX bd: <http://www.bigdata.com/rdf#>
+SPARQL_QUERY_TEMPLATE = """\
+PREFIX wd:   <http://www.wikidata.org/entity/>
+PREFIX wdt:  <http://www.wikidata.org/prop/direct/>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX hint: <http://www.bigdata.com/queryHints#>
 
-SELECT DISTINCT ?election ?electionLabel ?country ?countryLabel ?iso2 ?date WHERE {{
-  ?election wdt:P31/wdt:P279* wd:Q40231 .
-  ?election wdt:P17 ?country .
-  ?country wdt:P30 wd:Q46 .
-  ?election wdt:P585 ?date .
-  {date_filter}
-  OPTIONAL {{ ?country wdt:P297 ?iso2 . }}
+SELECT ?election ?electionLabel ?country ?countryLabel ?iso2 ?date WHERE {{
+  ?country  wdt:P30  wd:Q46 ;
+            wdt:P297 ?iso2 .
+
+  ?election wdt:P17  ?country ;
+            wdt:P585 ?date ;
+            wdt:P31  ?type .
+  ?type     wdt:P279* wd:Q40231 .
+
+  hint:Prior hint:rangeSafe true .
+  FILTER("{date_from}T00:00:00"^^xsd:dateTime <= ?date
+      && ?date < "{date_to}T00:00:00"^^xsd:dateTime)
+
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
 }}
-ORDER BY ?date ?election
-LIMIT {limit}
-OFFSET {offset}
+ORDER BY ?date
 """
 
 
-QueryEchoMode = Literal["never", "first", "all"]
-
-
-def _emit_query_echo(
-    *,
-    year: int,
-    month: int | None,
-    limit: int,
-    offset: int,
-    query: str,
-) -> None:
-    m_str = str(month) if month is not None else "—"
-    print(
-        "\n# Paste into https://query.wikidata.org/\n"
-        f"# year={year} month={m_str} LIMIT={limit} OFFSET={offset}\n"
-        "# ---\n",
-        end="",
-        flush=True,
+def build_sparql_query(*, date_from: date, date_to: date) -> str:
+    """Return the SPARQL text for a half-open ``[date_from, date_to)`` window."""
+    return SPARQL_QUERY_TEMPLATE.format(
+        date_from=date_from.isoformat(),
+        date_to=date_to.isoformat(),
     )
-    print(query, flush=True)
-    print("# --- end query ---\n", flush=True)
 
 
-def _date_filter_clause(year: int, month: int | None) -> str:
-    """Narrow by calendar month so each WDQS request stays under gateway time limits."""
-    if month is None:
-        return f"FILTER(YEAR(?date) = {year})"
-    return f"FILTER(YEAR(?date) = {year} && MONTH(?date) = {month})"
+def sparql_client() -> SPARQLWrapper:
+    sw = SPARQLWrapper(SPARQL_ENDPOINT, returnFormat=JSON, agent=USER_AGENT)
+    sw.setMethod(POST)
+    sw.setTimeout(SPARQL_TIMEOUT_SECONDS)
+    return sw
+
+
+def _qid(uri: str | None) -> str | None:
+    if not uri:
+        return None
+    return uri.rsplit("/", 1)[-1]
 
 
 def _binding_str(binding: dict[str, Any], key: str) -> str | None:
@@ -95,46 +126,6 @@ def _binding_str(binding: dict[str, Any], key: str) -> str | None:
     return cell.get("value")
 
 
-def _qid(uri: str | None) -> str | None:
-    if not uri:
-        return None
-    return uri.rsplit("/", 1)[-1]
-
-
-def parse_month_list(months_csv: str) -> list[int]:
-    """Parse '5,6,7' → [5, 6, 7]; validates 1–12."""
-    out: list[int] = []
-    for part in months_csv.split(","):
-        p = part.strip()
-        if not p:
-            continue
-        m = int(p)
-        if m < 1 or m > 12:
-            raise ValueError(f"Month must be 1–12, got {m}")
-        out.append(m)
-    if not out:
-        raise ValueError("No months in --months")
-    return sorted(set(out))
-
-
-def quick_sample_months(target_year: int) -> list[int]:
-    """
-    Few SPARQL rounds for testing: previous month, this month, next month
-    when target_year == today's year; otherwise January–March of target_year.
-    """
-    today = date.today()
-    if target_year != today.year:
-        return [1, 2, 3]
-    prev_m = today.month - 1
-    next_m = today.month + 1
-    months = {today.month}
-    if prev_m >= 1:
-        months.add(prev_m)
-    if next_m <= 12:
-        months.add(next_m)
-    return sorted(months)
-
-
 def _parse_election_date(raw: str | None) -> date | None:
     if not raw:
         return None
@@ -142,6 +133,52 @@ def _parse_election_date(raw: str | None) -> date | None:
         return date.fromisoformat(raw[:10])
     except ValueError:
         return None
+
+
+def _rows_from_bindings(bindings: list[dict[str, Any]]) -> list[ElectionRow]:
+    out: list[ElectionRow] = []
+    seen: set[str] = set()
+    for b in bindings:
+        election_uri = _binding_str(b, "election")
+        eq = _qid(election_uri)
+        if not eq or eq in seen:
+            continue
+        eday = _parse_election_date(_binding_str(b, "date"))
+        if eday is None:
+            continue
+        iso2 = (_binding_str(b, "iso2") or "").upper()
+        if len(iso2) != 2:
+            continue
+        seen.add(eq)
+        out.append(
+            ElectionRow(
+                qid=eq,
+                title=_binding_str(b, "electionLabel") or eq,
+                election_date=eday,
+                country_iso2=iso2,
+                country_name=_binding_str(b, "countryLabel") or iso2,
+                country_qid=_qid(_binding_str(b, "country")),
+                election_uri=election_uri,
+            )
+        )
+    return out
+
+
+def fetch_elections_sparql(
+    sw: SPARQLWrapper,
+    *,
+    date_from: date,
+    date_to: date,
+) -> list[ElectionRow]:
+    """Run the single SPARQL round-trip and return parsed rows.
+
+    Raises on any transport/server failure; callers (notably
+    :func:`run_year`) decide whether to fall back to Wikipedia.
+    """
+    sw.setQuery(build_sparql_query(date_from=date_from, date_to=date_to))
+    raw = sw.query().convert()
+    bindings = list(raw.get("results", {}).get("bindings", []))
+    return _rows_from_bindings(bindings)
 
 
 def _election_pk(qid: str) -> str:
@@ -154,20 +191,18 @@ def ensure_country(
     *,
     iso2: str,
     name: str,
-    country_wikidata_uri: str | None,
+    country_qid: str | None,
 ) -> Country | None:
     iso2 = iso2.strip().upper()
     if len(iso2) != 2:
         return None
 
-    wdq = _qid(country_wikidata_uri)
-
     if iso2 in cache:
         c = cache[iso2]
         if c.name != name:
             c.name = name
-        if wdq and not c.wikidata_id:
-            c.wikidata_id = wdq
+        if country_qid and not c.wikidata_id:
+            c.wikidata_id = country_qid
         return c
 
     existing = session.get(Country, iso2)
@@ -177,7 +212,7 @@ def ensure_country(
             name=name,
             region="europe",
             flag_emoji=None,
-            wikidata_id=wdq,
+            wikidata_id=country_qid,
         )
         session.add(c)
         cache[iso2] = c
@@ -186,138 +221,31 @@ def ensure_country(
     cache[iso2] = existing
     if existing.name != name:
         existing.name = name
-    if wdq and not existing.wikidata_id:
-        existing.wikidata_id = wdq
+    if country_qid and not existing.wikidata_id:
+        existing.wikidata_id = country_qid
     return existing
-
-
-def sparql_client() -> SPARQLWrapper:
-    sw = SPARQLWrapper(SPARQL_ENDPOINT, returnFormat=JSON, agent=USER_AGENT)
-    sw.setMethod(POST)
-    sw.setTimeout(300)
-    return sw
-
-
-def _retry_after_seconds(exc: urllib.error.HTTPError) -> int:
-    hdr = exc.headers.get("Retry-After") if exc.headers else None
-    if not hdr:
-        return 60
-    try:
-        return max(int(hdr), 1)
-    except ValueError:
-        return 60
-
-
-_TRANSIENT_QUERY_ERRORS: tuple[type[Exception], ...] = (
-    ConnectionResetError,
-    BrokenPipeError,
-    TimeoutError,
-    urllib.error.URLError,
-)
-
-
-def fetch_election_page(
-    sw: SPARQLWrapper,
-    spacing: _RequestSpacing,
-    *,
-    year: int,
-    month: int | None,
-    limit: int,
-    offset: int,
-    query_echo: QueryEchoMode = "first",
-) -> list[dict[str, Any]]:
-    date_filter = _date_filter_clause(year, month)
-    query = ELECTIONS_QUERY_TEMPLATE.format(
-        date_filter=date_filter,
-        limit=limit,
-        offset=offset,
-    )
-    if query_echo == "all" or (query_echo == "first" and offset == 0):
-        _emit_query_echo(
-            year=year, month=month, limit=limit, offset=offset, query=query
-        )
-    sw.setQuery(query)
-    max_attempts = 12
-    for attempt in range(max_attempts):
-        try:
-            raw = sw.query().convert()
-            return list(raw.get("results", {}).get("bindings", []))
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                spacing.expand_after_429()
-                wait = max(_retry_after_seconds(exc), 60)
-                time.sleep(wait)
-                if attempt + 1 == max_attempts:
-                    raise RuntimeError(
-                        "Wikidata Query Service returned HTTP 429 too many times; "
-                        "try again later or widen REQUEST_GAP_SECONDS."
-                    ) from exc
-            elif exc.code in GATEWAY_RETRY_CODES:
-                # 502/503/504: overloaded or query too heavy for one gateway slice.
-                wait = min(180, 25 * (2**attempt))
-                time.sleep(wait)
-                if attempt + 1 == max_attempts:
-                    raise RuntimeError(
-                        f"Wikidata Query Service HTTP {exc.code} persisted after retries; "
-                        "try again later, off-peak, or reduce PAGE_SIZE."
-                    ) from exc
-            else:
-                raise
-        except EndPointInternalError as exc:
-            # SPARQLWrapper maps HTTP 500 here; body usually contains TimeoutException.
-            wait = min(180, 30 * (2**attempt))
-            time.sleep(wait)
-            if attempt + 1 == max_attempts:
-                raise RuntimeError(
-                    "Wikidata Query Service returned HTTP 500 (often query timeout); "
-                    "retry off-peak, use --months / --quick, or reduce PAGE_SIZE."
-                ) from exc
-        except _TRANSIENT_QUERY_ERRORS as exc:
-            # WDQS often drops long-lived HTTPS connections (connection reset by peer).
-            wait = min(120, 10 * (2**attempt))
-            time.sleep(wait)
-            if attempt + 1 == max_attempts:
-                raise RuntimeError(
-                    "Wikidata Query Service closed the connection repeatedly; "
-                    "retry later or reduce PAGE_SIZE."
-                ) from exc
 
 
 def upsert_election_row(
     session: Session,
     country_cache: dict[str, Country],
-    *,
-    election_uri: str,
-    election_label: str | None,
-    country_uri: str | None,
-    country_label: str | None,
-    iso2: str | None,
-    election_day: date,
+    row: ElectionRow,
 ) -> tuple[str, str]:
-    """Returns (election_pk, human title)."""
-    eq = _qid(election_uri)
-    if not eq:
-        raise ValueError("missing election Q-id")
-
-    pk = _election_pk(eq)
-    title = election_label or eq
+    """Upsert a single :class:`ElectionRow`; returns ``(election_pk, title)``."""
+    pk = _election_pk(row.qid)
     today = date.today()
-    status = "upcoming" if election_day > today else "complete"
+    status = "upcoming" if row.election_date > today else "complete"
 
-    country_id: str | None = None
-    if iso2 and country_uri:
-        name = country_label or iso2.strip().upper()
-        ensured = ensure_country(
-            session,
-            country_cache,
-            iso2=iso2,
-            name=name,
-            country_wikidata_uri=country_uri,
-        )
-        if ensured is not None:
-            country_id = ensured.id
+    ensured = ensure_country(
+        session,
+        country_cache,
+        iso2=row.country_iso2,
+        name=row.country_name,
+        country_qid=row.country_qid,
+    )
+    country_id = ensured.id if ensured else None
 
-    wiki_url = f"https://www.wikidata.org/wiki/{eq}"
+    source_url = row.wikipedia_url or f"https://www.wikidata.org/wiki/{row.qid}"
     now = datetime.now(timezone.utc)
 
     existing = session.get(Election, pk)
@@ -327,30 +255,39 @@ def upsert_election_row(
                 id=pk,
                 country_id=country_id,
                 type=None,
-                election_date=election_day,
+                election_date=row.election_date,
                 status=status,
-                title=title,
+                title=row.title,
                 description=None,
-                wikipedia_url=None,
-                wikidata_id=eq,
+                wikipedia_url=row.wikipedia_url,
+                wikidata_id=row.qid,
                 turnout_pct=None,
-                source_url=wiki_url,
+                source_url=source_url,
                 last_updated=now,
             )
         )
     else:
-        existing.country_id = country_id
-        existing.election_date = election_day
+        if country_id is not None:
+            existing.country_id = country_id
+        existing.election_date = row.election_date
         existing.status = status
-        existing.title = title
-        existing.wikidata_id = eq
-        existing.source_url = wiki_url
+        existing.title = row.title
+        existing.wikidata_id = row.qid
+        if row.wikipedia_url and not existing.wikipedia_url:
+            existing.wikipedia_url = row.wikipedia_url
+        existing.source_url = source_url
         existing.last_updated = now
 
-    return pk, title
+    return pk, row.title
 
 
-def log_election(session: Session, *, election_id: str | None, status: str, message: str) -> None:
+def log_election(
+    session: Session,
+    *,
+    election_id: str | None,
+    status: str,
+    message: str,
+) -> None:
     session.add(
         IngestLog(
             source="wikidata",
@@ -361,126 +298,173 @@ def log_election(session: Session, *, election_id: str | None, status: str, mess
     )
 
 
+# Errors that should trigger the Wikipedia fallback when source="auto".
+# Bare bugs in our code (TypeError, AttributeError, ...) intentionally do not.
+_SPARQL_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+    EndPointInternalError,
+    SPARQLWrapperException,
+    urllib.error.HTTPError,
+    urllib.error.URLError,
+    TimeoutError,
+    ConnectionError,
+    OSError,
+)
+
+
+def parse_month_list(months_csv: str) -> list[int]:
+    """Parse ``"5,6,7"`` -> ``[5, 6, 7]``; rejects values outside 1..12."""
+    out: list[int] = []
+    for part in months_csv.split(","):
+        p = part.strip()
+        if not p:
+            continue
+        m = int(p)
+        if not 1 <= m <= 12:
+            raise ValueError(f"Month must be 1-12, got {m}")
+        out.append(m)
+    if not out:
+        raise ValueError("No months in --months")
+    return sorted(set(out))
+
+
+def _print_dry_run(rows: list[ElectionRow]) -> None:
+    header = f"{'date':<12} {'iso2':<5} {'qid':<28}  title"
+    print(header, flush=True)
+    print("-" * len(header), flush=True)
+    for r in rows:
+        print(
+            f"{r.election_date.isoformat():<12} "
+            f"{r.country_iso2:<5} "
+            f"{r.qid:<28}  "
+            f"{r.title}",
+            flush=True,
+        )
+
+
 def run_year(
     session: Session,
-    sw: SPARQLWrapper,
     *,
     year: int,
+    source: SourceMode = "auto",
     months: list[int] | None = None,
-    query_echo: QueryEchoMode = "first",
-) -> dict[str, int]:
-    country_cache: dict[str, Country] = {}
-    spacing = _RequestSpacing()
-    month_list = months if months is not None else list(range(1, 13))
-    stats = {
-        "pages": 0,
-        "rows": 0,
+    dry_run: bool = False,
+    sparql: SPARQLWrapper | None = None,
+    http: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Single-query SPARQL ingest with optional Wikipedia fallback.
+
+    - ``source="auto"`` (default): try SPARQL first; on transient transport
+      errors, fall back to the Wikipedia "Elections in YYYY" parser.
+    - ``source="sparql"``: SPARQL only; raise on failure.
+    - ``source="wikipedia"``: skip SPARQL; use the Wikipedia parser directly.
+
+    ``sparql`` and ``http`` are injection points for tests; production callers
+    can leave both None and we'll construct fresh clients.
+    """
+    date_from = date(year, 1, 1)
+    date_to = date(year + 1, 1, 1)
+
+    rows: list[ElectionRow] = []
+    used_source = ""
+    sparql_error: str | None = None
+
+    if source in ("auto", "sparql"):
+        sw = sparql or sparql_client()
+        t0 = time.perf_counter()
+        try:
+            rows = fetch_elections_sparql(sw, date_from=date_from, date_to=date_to)
+            used_source = "sparql"
+            print(
+                f"wikidata ingest: SPARQL returned {len(rows)} row(s) "
+                f"in {time.perf_counter() - t0:.2f}s",
+                flush=True,
+            )
+        except _SPARQL_TRANSIENT_ERRORS as exc:
+            if source == "sparql":
+                raise
+            sparql_error = f"{type(exc).__name__}: {exc}"
+            print(
+                f"wikidata ingest: SPARQL failed ({sparql_error}); "
+                "falling back to Wikipedia.",
+                flush=True,
+            )
+            rows = []
+
+    if source == "wikipedia" or (source == "auto" and not rows):
+        # Lazy import to avoid a circular dep with wikipedia_calendar.
+        from app.ingest.wikipedia_calendar import fetch_elections_wikipedia
+
+        t0 = time.perf_counter()
+        if http is None:
+            with httpx.Client(
+                headers={"User-Agent": USER_AGENT},
+                timeout=WIKIPEDIA_HTTP_TIMEOUT,
+                follow_redirects=True,
+            ) as client:
+                rows = fetch_elections_wikipedia(client, year=year)
+        else:
+            rows = fetch_elections_wikipedia(http, year=year)
+        used_source = "wikipedia"
+        print(
+            f"wikidata ingest: Wikipedia returned {len(rows)} row(s) "
+            f"in {time.perf_counter() - t0:.2f}s",
+            flush=True,
+        )
+
+    if months:
+        rows = [r for r in rows if r.election_date.month in months]
+
+    stats: dict[str, Any] = {
+        "source": used_source,
+        "year": year,
+        "months_filter": list(months) if months else None,
+        "rows_fetched": len(rows),
         "upserted": 0,
         "skipped": 0,
-        "months_queried": list(month_list),
+        "dry_run": dry_run,
+        "sparql_error": sparql_error,
     }
 
-    first_http_call = True
-    for month in month_list:
-        offset = 0
-        while True:
-            if not first_http_call:
-                time.sleep(spacing.gap_seconds)
-            first_http_call = False
+    if dry_run:
+        _print_dry_run(rows)
+        return stats
 
-            bindings = fetch_election_page(
-                sw,
-                spacing,
-                year=year,
-                month=month,
-                limit=PAGE_SIZE,
-                offset=offset,
-                query_echo=query_echo,
+    country_cache: dict[str, Country] = {}
+    for row in rows:
+        try:
+            pk, title = upsert_election_row(session, country_cache, row)
+            stats["upserted"] += 1
+            log_election(session, election_id=pk, status="success", message=title)
+        except Exception as exc:
+            stats["skipped"] += 1
+            log_election(
+                session,
+                election_id=_election_pk(row.qid),
+                status="error",
+                message=str(exc),
             )
-            stats["pages"] += 1
 
-            if not bindings:
-                break
-
-            seen_election_uris: set[str] = set()
-            for binding in bindings:
-                stats["rows"] += 1
-                election_uri = _binding_str(binding, "election")
-                if not election_uri or election_uri in seen_election_uris:
-                    continue
-                seen_election_uris.add(election_uri)
-
-                raw_date = _binding_str(binding, "date")
-                election_day = _parse_election_date(raw_date)
-                if election_day is None:
-                    stats["skipped"] += 1
-                    log_election(
-                        session,
-                        election_id=_election_pk(_qid(election_uri) or "unknown"),
-                        status="skipped",
-                        message=f"unparsed date: {raw_date!r}",
-                    )
-                    continue
-
-                election_label = _binding_str(binding, "electionLabel")
-                country_uri = _binding_str(binding, "country")
-                country_label = _binding_str(binding, "countryLabel")
-                iso2 = _binding_str(binding, "iso2")
-
-                try:
-                    pk, title = upsert_election_row(
-                        session,
-                        country_cache,
-                        election_uri=election_uri,
-                        election_label=election_label,
-                        country_uri=country_uri,
-                        country_label=country_label,
-                        iso2=iso2,
-                        election_day=election_day,
-                    )
-                    stats["upserted"] += 1
-                    log_election(
-                        session,
-                        election_id=pk,
-                        status="success",
-                        message=title,
-                    )
-                except Exception as exc:
-                    stats["skipped"] += 1
-                    log_election(
-                        session,
-                        election_id=_election_pk(_qid(election_uri) or "unknown"),
-                        status="error",
-                        message=str(exc)[:2000],
-                    )
-
-            session.commit()
-
-            if len(bindings) < PAGE_SIZE:
-                break
-            offset += PAGE_SIZE
-
+    session.commit()
     return stats
 
 
 def main(
-    year: int | None = None,
     *,
+    year: int,
+    source: SourceMode = "auto",
     months: list[int] | None = None,
-    query_echo: QueryEchoMode = "first",
+    dry_run: bool = False,
 ) -> None:
-    target_year = year if year is not None else 2026
     session = SessionLocal()
     try:
-        sw = sparql_client()
         stats = run_year(
             session,
-            sw,
-            year=target_year,
+            year=year,
+            source=source,
             months=months,
-            query_echo=query_echo,
+            dry_run=dry_run,
         )
-        print(stats)
+        print(stats, flush=True)
     except Exception as exc:
         session.rollback()
         session.add(
@@ -501,52 +485,41 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Upsert European Wikidata elections for a year (month-scoped SPARQL pages).",
+        description=(
+            "Upsert upcoming European elections from Wikidata (single SPARQL) "
+            "with a Wikipedia 'Elections in YYYY' fallback."
+        ),
     )
     parser.add_argument(
         "--year",
         type=int,
-        default=2026,
-        help="Calendar year to fetch (default: 2026)",
+        default=date.today().year,
+        help="Calendar year to ingest (default: current year).",
+    )
+    parser.add_argument(
+        "--source",
+        choices=["auto", "sparql", "wikipedia"],
+        default="auto",
+        help="auto = try SPARQL, fall back to Wikipedia on transport errors.",
     )
     parser.add_argument(
         "--months",
         type=str,
         default=None,
         metavar="M,M",
-        help="Comma-separated months (1–12) only, e.g. '5,6' for May & June. Faster test.",
+        help="Comma-separated months (1-12) to keep, e.g. '5,6' for May & June.",
     )
     parser.add_argument(
-        "--quick",
+        "--dry-run",
         action="store_true",
-        help=(
-            "Short test run: if --year matches today's year, query previous + current + "
-            "next month only; otherwise query January–March of that year."
-        ),
-    )
-    qecho = parser.add_mutually_exclusive_group()
-    qecho.add_argument(
-        "--no-print-query",
-        action="store_true",
-        help="Do not print SPARQL to stdout.",
-    )
-    qecho.add_argument(
-        "--print-all-queries",
-        action="store_true",
-        help="Print SPARQL for every paginated request (verbose).",
+        help="Print rows that would be upserted; do not write to the DB.",
     )
     args = parser.parse_args()
 
-    month_filter: list[int] | None = None
-    if args.months:
-        month_filter = parse_month_list(args.months)
-    elif args.quick:
-        month_filter = quick_sample_months(args.year)
-
-    echo: QueryEchoMode = "first"
-    if args.no_print_query:
-        echo = "never"
-    elif args.print_all_queries:
-        echo = "all"
-
-    main(year=args.year, months=month_filter, query_echo=echo)
+    month_filter = parse_month_list(args.months) if args.months else None
+    main(
+        year=args.year,
+        source=args.source,
+        months=month_filter,
+        dry_run=args.dry_run,
+    )

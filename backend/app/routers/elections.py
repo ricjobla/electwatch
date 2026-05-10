@@ -11,7 +11,11 @@ from app.schemas import (
     ElectionResultRow,
     ElectionsListResponse,
 )
-from app.services.election_query import get_election_with_results, list_elections
+from app.services.election_query import (
+    distinct_election_types,
+    get_election_with_results,
+    list_elections,
+)
 
 router = APIRouter(tags=["elections"])
 
@@ -36,6 +40,11 @@ def list_elections_api(
     status: str | None = None,
     region: str | None = None,
     country_id: str | None = None,
+    election_type: str | None = Query(
+        None,
+        alias="type",
+        description="Case-insensitive substring of elections.type",
+    ),
     limit: int = Query(500, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):
@@ -47,6 +56,7 @@ def list_elections_api(
             status=status,
             region=region,
             country_id=country_id,
+            election_type=election_type,
             limit=limit,
         )
     except ValueError as exc:
@@ -71,6 +81,12 @@ def _election_results_rows(election: Election) -> list[ElectionResultRow]:
             )
         )
     return rows
+
+
+@router.get("/elections/types", response_model=list[str])
+def get_election_types(db: Session = Depends(get_db)):
+    """Distinct, non-empty values of ``Election.type`` for filter dropdowns."""
+    return distinct_election_types(db)
 
 
 @router.get("/elections/{election_id}/results", response_model=list[ElectionResultRow])

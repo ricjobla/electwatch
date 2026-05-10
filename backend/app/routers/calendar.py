@@ -31,6 +31,12 @@ def get_calendar(
     region: str | None = Query(
         None, description="Substring match on countries.region (e.g. europe)"
     ),
+    election_type: str | None = Query(
+        None,
+        alias="type",
+        description="Case-insensitive substring of elections.type (e.g. 'parliamentary')",
+    ),
+    country_id: str | None = Query(None, alias="country", min_length=2, max_length=2),
     limit: int = Query(500, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):
@@ -41,6 +47,8 @@ def get_calendar(
             date_to=date_to,
             status=status,
             region=region,
+            country_id=country_id,
+            election_type=election_type,
             limit=limit,
         )
     except ValueError as exc:

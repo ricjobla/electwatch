@@ -84,10 +84,12 @@ function formatElectionDate(raw) {
  * @param {Object} props
  * @param {Record<string, string | Date | number>} [props.nextElectionByCountry] ISO2 → next upcoming election date
  * @param {(isoCode: string) => void} [props.onCountryClick]
+ * @param {string|null} [props.selectedIso2] currently focused country (renders an outline)
  */
 export default function EuropeMap({
   nextElectionByCountry = {},
   onCountryClick = () => {},
+  selectedIso2 = null,
 }) {
   const [topology, setTopology] = useState(null)
   const [topoError, setTopoError] = useState(null)
@@ -236,24 +238,29 @@ export default function EuropeMap({
                   const iso = String(geo.properties.ISO_A2 || '').toUpperCase()
                   const fill = fillForIso(iso, nextByIsoUpper)
                   const clickable = Boolean(iso && iso !== '-99')
+                  const isSelected =
+                    selectedIso2 &&
+                    iso === String(selectedIso2).toUpperCase()
+                  const stroke = isSelected ? '#f1f5f9' : PALETTE.stroke
+                  const strokeWidth = isSelected ? 1.6 : 0.45
                   return (
                     <Geography
                       key={geo.rsmKey}
                       geography={geo}
                       fill={fill}
-                      stroke={PALETTE.stroke}
-                      strokeWidth={0.45}
+                      stroke={stroke}
+                      strokeWidth={strokeWidth}
                       style={{
                         default: {
                           outline: 'none',
                           cursor: clickable ? 'pointer' : 'default',
-                          transition: 'fill 0.15s ease',
+                          transition: 'fill 0.15s ease, stroke 0.15s ease',
                         },
                         hover: {
                           outline: 'none',
                           fill,
-                          stroke: PALETTE.strokeHover,
-                          strokeWidth: 0.65,
+                          stroke: isSelected ? '#f1f5f9' : PALETTE.strokeHover,
+                          strokeWidth: isSelected ? 1.8 : 0.65,
                           filter: 'brightness(1.08)',
                           cursor: clickable ? 'pointer' : 'default',
                         },
