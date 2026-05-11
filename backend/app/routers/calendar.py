@@ -20,6 +20,7 @@ def _calendar_row(election) -> CalendarElectionOut:
         country_id=election.country_id,
         country_name=election.country.name if election.country else None,
         turnout_pct=election.turnout_pct,
+        reporting_pct=election.reporting_pct,
     )
 
 

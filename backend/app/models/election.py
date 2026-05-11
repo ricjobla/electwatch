@@ -28,6 +28,7 @@ class Election(Base):
     wikipedia_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     wikidata_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     turnout_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reporting_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_updated: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

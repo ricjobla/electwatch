@@ -18,6 +18,7 @@ REPO_BACKEND = Path(__file__).resolve().parent.parent
 
 # Force the in-memory SQLite engine before app.database is imported anywhere.
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ.setdefault("SCRAPER_SCHEDULER_ENABLED", "false")
 
 # Allow `import app...` from the backend package without a pip install.
 if str(REPO_BACKEND) not in sys.path:
