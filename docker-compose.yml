@@ -22,6 +22,8 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-electwatch}:${POSTGRES_PASSWORD:-electwatch}@db:5432/${POSTGRES_DB:-electwatch}
+      SCRAPER_SCHEDULER_ENABLED: "true"
+      ELECTWATCH_DEBUG: "true"
     depends_on:
       db:
         condition: service_healthy

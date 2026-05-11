@@ -3,6 +3,7 @@ import { BrowserRouter, Link, Route, Routes } from 'react-router-dom'
 import Country from './pages/Country.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Election from './pages/Election.jsx'
+import IngestLog from './pages/IngestLog.jsx'
 
 function App() {
   return (
@@ -21,6 +22,17 @@ function App() {
               </Link>
             </div>
             <nav className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+              {import.meta.env.DEV ? (
+                <>
+                  <Link
+                    to="/debug/ingest-log"
+                    className="hover:text-slate-300"
+                  >
+                    Ingest log
+                  </Link>
+                  <span aria-hidden="true">·</span>
+                </>
+              ) : null}
               <a
                 href="https://www.wikidata.org"
                 target="_blank"
@@ -46,6 +58,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/country/:iso" element={<Country />} />
             <Route path="/election/:id" element={<Election />} />
+            <Route path="/debug/ingest-log" element={<IngestLog />} />
             <Route
               path="*"
               element={

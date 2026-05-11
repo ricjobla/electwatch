@@ -26,6 +26,7 @@ class CalendarElectionOut(BaseModel):
     country_id: str | None = None
     country_name: str | None = None
     turnout_pct: float | None = None
+    reporting_pct: float | None = None
 
 
 class ElectionResultRow(BaseModel):
@@ -36,6 +37,7 @@ class ElectionResultRow(BaseModel):
     party_name: str | None = None
     party_short_name: str | None = None
     party_color_hex: str | None = None
+    result_type: str = "final"
 
 
 class ElectionDetailOut(BaseModel):
@@ -51,6 +53,7 @@ class ElectionDetailOut(BaseModel):
     wikipedia_url: str | None = None
     wikidata_id: str | None = None
     turnout_pct: float | None = None
+    reporting_pct: float | None = None
     source_url: str | None = None
     last_updated: datetime | None = None
     country: CountryOut | None = None
@@ -67,3 +70,18 @@ class ElectionsListResponse(BaseModel):
 
 class CountriesResponse(BaseModel):
     countries: list[CountryOut]
+
+
+class LiveElectionsResponse(BaseModel):
+    elections: list[CalendarElectionOut]
+
+
+class IngestLogRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    source: str | None = None
+    election_id: str | None = None
+    status: str | None = None
+    message: str | None = None
+    run_at: datetime

@@ -30,6 +30,7 @@ def _calendar_row(election: Election) -> CalendarElectionOut:
         country_id=election.country_id,
         country_name=election.country.name if election.country else None,
         turnout_pct=election.turnout_pct,
+        reporting_pct=election.reporting_pct,
     )
 
 
@@ -78,6 +79,7 @@ def _election_results_rows(election: Election) -> list[ElectionResultRow]:
                 party_name=party.name if party else None,
                 party_short_name=party.short_name if party else None,
                 party_color_hex=party.color_hex if party else None,
+                result_type=r.result_type or "final",
             )
         )
     return rows
@@ -116,6 +118,7 @@ def get_election(election_id: str, db: Session = Depends(get_db)):
         wikipedia_url=election.wikipedia_url,
         wikidata_id=election.wikidata_id,
         turnout_pct=election.turnout_pct,
+        reporting_pct=election.reporting_pct,
         source_url=election.source_url,
         last_updated=election.last_updated,
         country=election.country,
