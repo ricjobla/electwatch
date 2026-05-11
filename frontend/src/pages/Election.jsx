@@ -17,6 +17,13 @@ export default function Election() {
   const { id = '' } = useParams()
   const { data, isLoading, error } = useElectionDetail(id)
 
+  const hasPartialRows =
+    data?.results?.some((r) => r.result_type === 'partial') ?? false
+  const chartCaption =
+    data?.status === 'live' && hasPartialRows
+      ? 'Partial results — figures change as more votes are counted.'
+      : undefined
+
   return (
     <section className="space-y-6">
       <header className="border-b border-slate-800 pb-4">
@@ -85,12 +92,27 @@ export default function Election() {
 
       {data && (
         <>
+          {data.status === 'live' &&
+          data.reporting_pct != null &&
+          Number.isFinite(data.reporting_pct) ? (
+            <div className="rounded-lg border border-amber-900/50 bg-amber-950/20 px-4 py-3 font-mono text-xs text-amber-200/90">
+              Live tally: approximately{' '}
+              <span className="tabular-nums font-semibold">
+                {data.reporting_pct.toFixed(1)}%
+              </span>{' '}
+              of precincts / reporting nodes included in this snapshot.
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
             <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
               <h3 className="mb-3 font-mono text-[10px] uppercase tracking-wider text-slate-500">
                 Results — vote share
               </h3>
-              <ResultsChart results={data.results || []} />
+              <ResultsChart
+                results={data.results || []}
+                caption={chartCaption}
+              />
             </div>
             <div>
               <h3 className="mb-3 font-mono text-[10px] uppercase tracking-wider text-slate-500">
@@ -133,6 +155,14 @@ export default function Election() {
                 value={
                   data.turnout_pct != null
                     ? `${data.turnout_pct.toFixed(2)}%`
+                    : null
+                }
+              />
+              <Field
+                label="% reporting (live)"
+                value={
+                  data.reporting_pct != null
+                    ? `${data.reporting_pct.toFixed(2)}%`
                     : null
                 }
               />

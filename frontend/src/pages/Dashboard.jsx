@@ -5,6 +5,7 @@ import ElectionCard from '../components/ElectionCard'
 import WorldMap from '../components/WorldMap'
 import { useCalendar } from '../hooks/useCalendar'
 import { useElectionTypes } from '../hooks/useElectionTypes'
+import { useLiveElections } from '../hooks/useLiveElections'
 import { mergeElectionTypes } from '../lib/electionTypes'
 
 function isoToday(yearOffset = 0) {
@@ -55,7 +56,12 @@ export default function Dashboard() {
     [from, to, status, type],
   )
 
-  const { data, isLoading, error, refetch, isFetching } = useCalendar(params)
+  const { data: livePayload } = useLiveElections()
+  const liveCount = livePayload?.elections?.length ?? 0
+
+  const { data, isLoading, error, refetch, isFetching } = useCalendar(params, {
+    refetchInterval: liveCount > 0 ? 60_000 : false,
+  })
   const elections = useMemo(() => data?.elections ?? [], [data])
 
   const { data: typeOptions = [] } = useElectionTypes()
@@ -95,6 +101,23 @@ export default function Dashboard() {
         onRefresh={() => refetch()}
         loading={isFetching}
       />
+
+      {liveCount > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-800/60 bg-amber-950/25 px-4 py-3 font-mono text-xs text-amber-100/90">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-red-950/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-300">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+            </span>
+            Live
+          </span>
+          <span>
+            {liveCount === 1
+              ? 'One election is tallying — refreshing every 60s.'
+              : `${liveCount} elections tallying — refreshing every 60s.`}
+          </span>
+        </div>
+      ) : null}
 
       <div className="relative">
         <WorldMap

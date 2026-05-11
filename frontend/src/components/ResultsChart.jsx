@@ -20,8 +20,9 @@ import { partyColor } from '../lib/partyColors'
  * @param {Array<{party_name?: string, party_short_name?: string, vote_share?: number, seats_won?: number, party_color_hex?: string, party_id?: string}>} props.results
  * @param {number} [props.maxRows=12] truncate at top-N parties (sorted by vote share)
  * @param {string} [props.height='auto'] CSS height; defaults to N * 28px capped to maxRows
+ * @param {string} [props.caption] Optional footnote under the chart (e.g. partial results).
  */
-export default function ResultsChart({ results = [], maxRows = 12, height }) {
+export default function ResultsChart({ results = [], maxRows = 12, height, caption }) {
   const filtered = (results || [])
     .filter((r) => r && (r.vote_share != null || r.seats_won != null))
     .map((r) => ({
@@ -98,6 +99,9 @@ export default function ResultsChart({ results = [], maxRows = 12, height }) {
           </Bar>
         </BarChart>
       </ResponsiveContainer>
+      {caption ? (
+        <p className="mt-2 font-mono text-[10px] text-slate-500">{caption}</p>
+      ) : null}
     </div>
   )
 }

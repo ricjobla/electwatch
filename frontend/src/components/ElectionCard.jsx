@@ -97,6 +97,14 @@ export default function ElectionCard({ election }) {
         </div>
       </div>
 
+      {election.status === 'live' &&
+      election.reporting_pct != null &&
+      Number.isFinite(election.reporting_pct) ? (
+        <p className="font-mono text-[10px] text-amber-400/90">
+          Reporting ~{election.reporting_pct.toFixed(1)}% (partial tally)
+        </p>
+      ) : null}
+
       {election.type ? (
         <div className="absolute right-3 top-3 hidden font-mono text-[10px] uppercase tracking-wider text-slate-600 group-hover:block">
           {election.type}

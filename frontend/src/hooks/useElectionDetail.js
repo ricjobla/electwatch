@@ -8,5 +8,7 @@ export function useElectionDetail(electionId) {
     queryFn: () =>
       fetchJson(`/api/elections/${encodeURIComponent(electionId)}`),
     enabled: Boolean(electionId),
+    refetchInterval: (query) =>
+      query.state.data?.status === 'live' ? 60_000 : false,
   })
 }
